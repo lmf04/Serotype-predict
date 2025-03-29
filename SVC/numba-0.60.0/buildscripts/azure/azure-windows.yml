@@ -1,0 +1,69 @@
+parameters:
+  name: ''
+  vmImage: ''
+
+jobs:
+- job: ${{ parameters.name }}
+  pool:
+    vmImage: ${{ parameters.vmImage }}
+  strategy:
+    matrix:
+      py39_np122:
+        PYTHON: '3.9'
+        NUMPY: '1.22'
+        CONDA_ENV: 'testenv'
+        TEST_START_INDEX: 16
+      py312_np126:
+        PYTHON: '3.12'
+        NUMPY: '1.26'
+        CONDA_ENV: 'testenv'
+        TEST_START_INDEX: 17
+
+  steps:
+    - powershell: Write-Host "##vso[task.prependpath]$env:CONDA\Scripts"
+      displayName: Add conda to PATH
+
+    - script: |
+        buildscripts\\incremental\\setup_conda_environment.cmd
+      displayName: 'Before Install'
+
+    - script: |
+        buildscripts\\incremental\\build.cmd
+      displayName: 'Build'
+
+    - script: |
+        call activate %CONDA_ENV%
+        python -m numba -s
+      displayName: 'Display numba system information'
+
+    - script: |
+        call activate %CONDA_ENV%
+        python -m numba.misc.POST
+      displayName: 'Power-On-Self-Test to make sure testing will likely work'
+
+    - script: |
+        call activate %CONDA_ENV%
+        set NUMBA_ENABLE_CUDASIM=1
+        python -m numba.runtests -l
+      displayName: 'List discovered tests'
+
+    - script: |
+        call activate %CONDA_ENV%
+        set NUMBA_ENABLE_CUDASIM=1
+        echo "Running shard of discovered tests: %TEST_START_INDEX%,None,%TEST_COUNT%"
+        python -m numba.runtests -b -v -g -m 2 -- numba.tests
+      displayName: 'Test modified test files'
+
+    - script: |
+        call activate %CONDA_ENV%
+        set NUMBA_ENABLE_CUDASIM=1
+        echo "Running shard of discovered tests: %TEST_START_INDEX%:%TEST_COUNT%"
+        python runtests.py -m 2 -b -j "%TEST_START_INDEX%:%TEST_COUNT%"  --exclude-tags='long_running' --junit -- numba.tests
+      displayName: 'Test shard of test files'
+
+    - task: PublishTestResults@2
+      condition: succeededOrFailed()
+      displayName: Publish Test Results
+      inputs:
+        testResultsFiles: 'junit_numba_*.xml'
+        mergeTestResults: true
